@@ -1,0 +1,118 @@
+name: CreateandPushPackage
+
+on:
+  pull_request:
+    types:
+      - closed
+    
+permissions: write-all
+
+jobs:
+  CreateandPushPackage:
+    runs-on: ubuntu-latest
+
+    if: contains(github.event.pull_request.labels.*.name, 'autoclose') 
+
+    env:
+        GH_TOKEN: ${{ secrets.ENABLON_BOT_GITHUB_TOKEN }}
+        ARTIFACTORY_USERNAME: ${{ secrets.LOCAL_ARTIFACTORY_USERNAME }}
+        ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.LOCAL_ARTIFACTORY_ACCESS_TOKEN }}
+        GPO_JFROG_ACCESS_TOKEN: ${{ secrets.GPO_JFROG_ACCESS_TOKEN }}
+        GPO_JFROG_USERNAME: ${{ secrets.GPO_JFROG_USERNAME }}    
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4       
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: base branch last tag
+        id: baseBranchLastTag
+        uses: eVisionSoftware/IntegrationPlatform.Common/actions/minVerGetTagHeadBranch@main
+
+      - name: calculate next base tag
+        id: calculateNextBasetag
+        shell: pwsh
+        run: |
+          $version = "${{ steps.baseBranchLastTag.outputs.head-last-tag}}"
+          
+          if ($version -like "*alpha*") {
+            $version = $version -split "-"
+            $NewTag = $version[0]
+            echo "NewTag=$NewTag"
+          }
+          else { 
+            $terms = $version -split "\."
+            $major = $terms[0]
+            $minor = $terms[1]
+            $build = $terms[2]
+            $newbuild = [int]$build + 1
+            $NewTag = "$majop.$minor.$newbuild"
+            write-output "localNewTag = $NewTag"
+          }
+          write-output "localNewTag=$NewTag" >> $env:GITHUB_OUTPUT
+
+
+      - name: build tag
+        id: version
+        shell: pwsh
+        run: |
+          $branchName = "${{ github.event.pull_request.head.ref }}"
+          $Tag = $branchName -replace 'eVision\.OneVisionPackage\.', ''
+          $NewTag = "$Tag"
+          write-output "NewTag=$NewTag"
+          write-output "NewTag=$NewTag" >> $env:GITHUB_OUTPUT
+
+      - name: Create Package
+        uses: eVisionSoftware/IntegrationPlatform.Common/actions/createPackage@main
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          new-version: '${{ steps.version.outputs.NewTag }}'
+          ovp-nuspec-path: 'src/OneVisionPackage/OneVisionPackage.nuspec'
+          ovp-showcase-nuspec-path: 'src/OneVisionPackage.ShowCase/OneVisionPackage.ShowCase.nuspec'
+          artifacts-path: './artifacts'
+
+      - name: Push package
+        if: ${{ success() }}
+        id: push-package
+        uses: eVisionSoftware/IntegrationPlatform.Common/actions/pushPackage@main
+        with:
+            repository-feed: 'dev-nuget-ci'
+            artifactory-username: ${{ secrets.ARTIFACTORY_USERNAME_WRITE }}
+            artifactory-token: ${{ secrets.ARTIFACTORY_ACCESS_TOKEN_WRITE}}
+            github-token: ${{ env.GH_TOKEN }}
+            package-path: './artifacts/'
+
+      - name: Create Tag and Release
+        id: create-tag-and-release
+        if: ${{ success() }}
+        shell: pwsh
+        run: |
+
+          # $latestReleaseTag = $(gh release view --json tagName -q ".tagName") 
+          $local_New_Tag = "${{ steps.calculateNextBasetag.outputs.localNewTag }}"
+          git checkout -B "main"
+          git tag "v$local_New_Tag"
+          git push origin "v$local_New_Tag"
+
+          # Create the release with the difference from the latest release
+          # $releaseNotes = "created by OnDemand workflow. `nChanges since $latestReleaseTag"
+          # $releaseNotesInfo = "`n## [$NewTag](https://github.com/eVisionSoftware/OnDemandOVP/compare/$latestReleaseTag...v$NewTag) ($((Get-Date).ToString('yyyy-MM-dd')))"
+          # $releaseNotes = $releaseNotes + $releaseNotesInfo
+          
+          gh release create "v$local_New_Tag" -t "v$local_New_Tag" -n "v$local_New_Tag" -n "created by OnDemand workflow package eVision.OneVisionPackage.${{ steps.version.outputs.NewTag}} "
+          # gh release create "v$NewTag" -t "v$NewTag" -n "v$NewTag" -n "$releaseNotes"
+
+
+      - name: Display summary
+        if: ${{ success() }}
+        run: |
+          echo ":chart: Aritifact OVP link(:link:): ${{ steps.push-package.outputs.ovp-artifactory-ui }}" >> $GITHUB_STEP_SUMMARY  
+          echo ":chart: Aritifact OVP ShowCase link(:link:): ${{ steps.push-package.outputs.ovp-showcase-artifactory-ui }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          releaseUrl="https://github.com/${{ github.repository }}/releases/tag/v${{ steps.calculateNextBasetag.outputs.localNewTag }}"
+          echo ":fast_forward: Release link(:link:): $releaseUrl" >> $GITHUB_STEP_SUMMARY
+     

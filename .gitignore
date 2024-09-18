@@ -1,0 +1,6 @@
+*.hcl
+*.html
+.terraform/
+clean-tfstate.ps1
+terraform.tfstate
+backend-config.tf

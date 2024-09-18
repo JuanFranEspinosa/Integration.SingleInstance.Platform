@@ -1,0 +1,54 @@
+name: automerge
+on:
+  pull_request:
+    types:
+      - labeled
+      - unlabeled
+      - synchronize
+      - opened
+      - edited
+      - ready_for_review
+      - reopened
+      - unlocked
+  pull_request_review:
+    types:
+      - submitted
+  check_suite:
+    types:
+      - completed
+  status: {}
+  
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: automerge
+        id: automerge
+        uses: "pascalgn/automerge-action@v0.16.3"
+        env:
+          GITHUB_TOKEN: "${{ secrets.AUTOMERGE_TOKEN }}"
+
+      - name: print automerge result
+        run: echo "mergeResult=${{ steps.automerge.outputs.mergeResult }}"
+
+      - name: checkout branch
+        if:  ${{ steps.automerge.outputs.mergeResult == 'merge_failed' }} 
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Force Close if Automerge Fails
+        if:  ${{ steps.automerge.outputs.mergeResult == 'merge_failed' }} 
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "Please resolve PR conflicts."
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+      
+      - name: Pull Request information
+        run: |
+          echo ":fast_forward: This action is related to PR(:title:): ${{ github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY
+          echo ":fast_forward: This action is related to PR(:hash:): ${{ steps.automerge.outputs.pullRequestNumber }}" >> $GITHUB_STEP_SUMMARY
+          echo ":fast_forward: This action is related to PR(:link:): ${{ github.event.pull_request.url }}" >> $GITHUB_STEP_SUMMARY
+         
